@@ -146,9 +146,9 @@ class MediaProcessor:
                         "TensorRT optimization enabled on device %d", self.device_id
                     )
                 else:
-                    logger.info(
-                        "Face swapper using CUDA only (TensorRT not compatible with inswapper model)"
-                    )
+                    from utils.hardware_backend import backend_name
+
+                    logger.info("Face models using %s inference", backend_name())
                 logger.info("MediaProcessor initialized on device %d", self.device_id)
             except FriendlyError:
                 raise

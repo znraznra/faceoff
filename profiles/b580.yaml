@@ -1,0 +1,32 @@
+# Prepared Intel GPU profile. Must be validated on the B580 before production use.
+runtime:
+  backend: openvino
+  require_gpu: true
+  profile: b580
+  openvino_device: GPU
+  device_name_contains: B580
+gpu:
+  batch_size: 1
+  max_batch_size: 1
+  workers_per_gpu: 1
+  multi_gpu_video_enabled: false
+  tensorrt_enabled: false
+  auto_workload_tune: false
+  frame_retention_enabled: false
+  paste_on_gpu: false
+  detection_on_gpu: false
+  enhancement_chain_enabled: false
+streaming:
+  chunk_size: 4
+  hwaccel_decode: false # Portable host-frame decoding; inference still runs on Intel GPU.
+  zero_copy_enabled: false
+  nvcodec_decode: false
+  nvenc_encode: false
+  video_codec: h264_qsv
+  encoder_required: true
+  video_bitrate: 6M
+  encoder_diagnostics: true
+model_cache:
+  preload_on_startup: false
+compression:
+  enabled: false

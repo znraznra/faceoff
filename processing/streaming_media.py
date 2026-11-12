@@ -34,6 +34,7 @@ from processing.workload_profile import (
 )
 from utils import video_io
 from utils.config_manager import config
+from utils.hardware_backend import uses_cuda, validate_features
 from utils.memory_manager import (
     MemoryManager,
     clear_cuda_caches,
@@ -129,7 +130,7 @@ def _effective_chunk_size(
 ) -> int:
     if profile is not None and profile.chunk_size is not None:
         requested = profile.chunk_size
-    if not torch.cuda.is_available():
+    if not uses_cuda() or not torch.cuda.is_available():
         size = requested
     else:
         mm = MemoryManager(device_ids[0])
@@ -328,6 +329,7 @@ def process_streaming(
             except Exception as exc:
                 logger.debug("stage callback failed: %s", exc)
 
+    validate_features(enhance, restore_faces)
     if not device_ids:
         device_ids = [processor.device_id]
 

@@ -1,0 +1,4 @@
+-r portable-common.txt
+onnxruntime-gpu==1.20.2
+# InsightFace declares onnxruntime (CPU) too. Installer removes that conflicting
+# distribution, then reinstalls this GPU wheel to restore shared module files.

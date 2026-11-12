@@ -61,6 +61,9 @@ def process_image(
     *,
     stage_cb: Optional[Callable[[float, str], None]] = None,
 ) -> Tuple[Optional[str], None]:
+    from utils.hardware_backend import validate_features
+
+    validate_features(enhance, restore_faces)
     """Process a single image with face swapping (in-memory restore/enhance)."""
 
     def _stage(frac: float, desc: str) -> None:
@@ -119,8 +122,8 @@ def process_image(
                 ):
                     pbar.update(1)
                     continue
-                swapped = processor.swapper.get(
-                    swapped, dst_faces[dst_idx], src_faces[src_idx], paste_back=True
+                swapped = processor.swap_face(
+                    swapped, dst_faces[dst_idx], src_faces[src_idx]
                 )
                 swaps_applied += 1
                 pbar.update(1)

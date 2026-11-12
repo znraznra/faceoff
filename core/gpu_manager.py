@@ -7,6 +7,7 @@ import subprocess
 from typing import List, Optional
 
 import torch
+from utils.hardware_backend import uses_cuda, intel_device
 
 logger = logging.getLogger("FaceOff")
 
@@ -17,11 +18,19 @@ class GPUManager:
     @staticmethod
     def is_available() -> bool:
         """Check if CUDA/GPU is available."""
+        if not uses_cuda():
+            try:
+                intel_device()
+                return True
+            except (ImportError, RuntimeError):
+                return False
         return torch.cuda.is_available()
 
     @staticmethod
     def get_device_count() -> int:
         """Get number of available GPUs."""
+        if not uses_cuda():
+            return 1 if GPUManager.is_available() else 0
         return torch.cuda.device_count() if GPUManager.is_available() else 0
 
     @staticmethod
@@ -30,6 +39,8 @@ class GPUManager:
         Get GPU memory usage information for all available GPUs.
         Returns list of formatted strings, one per GPU.
         """
+        if not uses_cuda():
+            return GPUManager.get_available_gpus()
         if not GPUManager.is_available():
             return ["🖥️ GPU: Not available (using CPU)"]
 
@@ -95,6 +106,13 @@ class GPUManager:
     @staticmethod
     def get_available_gpus() -> List[str]:
         """Get list of available GPU options for dropdown."""
+        if not uses_cuda():
+            import openvino as ov
+
+            device = intel_device()
+            return [
+                f"GPU 0: {ov.Core().get_property(device, 'FULL_DEVICE_NAME')} (OpenVINO {device})"
+            ]
         if not GPUManager.is_available():
             return ["CPU Only"]
 

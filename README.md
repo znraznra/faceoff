@@ -116,6 +116,10 @@ Read the write-up at [thebiglaskowski.com/blog/face-swapping-with-ai](https://th
 
 ## Quick Start
 
+For the opt-in Quadro P600 and Intel Arc B580 file-based profiles, see
+[HARDWARE_PROFILES.md](HARDWARE_PROFILES.md). Those use separate environments
+and hardware-specific setup scripts instead of the default CUDA-13 lockfile.
+
 ```bash
 git clone https://github.com/thebiglaskowski/faceoff.git
 cd faceoff

@@ -44,7 +44,28 @@ class Config:
                     f"Config file not found: {self._config_path}. Using defaults."
                 )
                 self._config = {}
+            profile = os.environ.get("FACEOFF_PROFILE")
+            if profile:
+                if profile not in ("p600", "b580"):
+                    raise ValueError(f"Unknown FACEOFF_PROFILE: {profile}")
+                profile_path = (
+                    Path(__file__).parent.parent / "profiles" / f"{profile}.yaml"
+                )
+                with profile_path.open(encoding="utf-8") as f:
+                    overlay = yaml.safe_load(f)
+
+                def merge(base, extra):
+                    for key, value in extra.items():
+                        if isinstance(value, dict) and isinstance(base.get(key), dict):
+                            merge(base[key], value)
+                        else:
+                            base[key] = value
+
+                merge(self._config, overlay)
+                logger.info("Hardware profile loaded: %s", profile)
         except Exception as e:
+            if os.environ.get("FACEOFF_PROFILE"):
+                raise RuntimeError("Cannot load requested hardware profile") from e
             logger.error(f"Error loading config: {e}. Using defaults.")
             self._config = {}
 

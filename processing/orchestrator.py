@@ -104,6 +104,9 @@ def process_media(
         RuntimeError: If processing fails
     """
     # Prepare output directory structure
+    from utils.hardware_backend import validate_features
+
+    validate_features(opts.enhance, opts.restore_faces)
     output_path = Path(opts.output_dir)
     output_path.mkdir(exist_ok=True)
 
@@ -158,7 +161,7 @@ def process_media(
 
     # Initialize primary processor with automatic TensorRT (will fallback to CUDA if not available)
     logger.info(
-        "Initializing MediaProcessor with device(s): %s (TensorRT auto-detected)",
+        "Initializing MediaProcessor with device(s): %s",
         device_ids,
     )
     primary_device = device_ids[0] if device_ids else 0

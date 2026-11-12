@@ -174,6 +174,10 @@ def _ensure_nvidia_libraries_ready() -> None:
 @lru_cache(maxsize=1)
 def is_tensorrt_runtime_available() -> bool:
     """Return True only when TensorRT libs and ORT's TensorRT EP both load."""
+    from utils.hardware_backend import uses_cuda
+
+    if not uses_cuda():
+        return False
     _ensure_nvidia_libraries_ready()
     if _try_load_tensorrt_library() is None:
         logger.info("TensorRT runtime libraries not found; CUDA-only inference")
@@ -267,13 +271,17 @@ def preload_nvidia_libraries() -> None:
 def _cuda_options(device_id: int) -> dict:
     gpu_mem_limit_mb = config.get("gpu", "onnx_mem_limit_mb", default=2048)
     algo = config.get("gpu", "cudnn_conv_algo_search", default="HEURISTIC")
-    return {
+    options = {
         "device_id": device_id,
         "arena_extend_strategy": "kSameAsRequested",
         "gpu_mem_limit": gpu_mem_limit_mb * 1024 * 1024,
         "cudnn_conv_algo_search": algo,
         "do_copy_in_default_stream": True,
     }
+    workspace = config.get("gpu", "cudnn_conv_use_max_workspace")
+    if workspace is not None:
+        options["cudnn_conv_use_max_workspace"] = "1" if workspace else "0"
+    return options
 
 
 def build_face_analysis_providers(
@@ -283,6 +291,10 @@ def build_face_analysis_providers(
     tensorrt_fp16: bool | None = None,
 ) -> List[ProviderEntry]:
     """Providers for InsightFace FaceAnalysis (detection / landmarks)."""
+    from utils.hardware_backend import uses_cuda, intel_providers
+
+    if not uses_cuda():
+        return intel_providers()
     if use_tensorrt is None:
         use_tensorrt = config.tensorrt_enabled
     if tensorrt_fp16 is None:
@@ -300,6 +312,10 @@ def build_face_analysis_providers(
 
 def build_swapper_providers(device_id: int) -> List[ProviderEntry]:
     """Providers for inswapper (CUDA only — TensorRT incompatible with this model)."""
+    from utils.hardware_backend import uses_cuda, intel_providers
+
+    if not uses_cuda():
+        return intel_providers()
     return [
         ("CUDAExecutionProvider", _cuda_options(device_id)),
         "CPUExecutionProvider",

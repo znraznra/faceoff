@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from utils.config_manager import config
+from utils.hardware_backend import uses_cuda
 
 logger = logging.getLogger("FaceOff")
 
@@ -46,7 +47,7 @@ def clear_cuda_caches(
     device_ids: Optional[List[int]] = None, *, force: bool = True
 ) -> None:
     """Clear CUDA allocator caches on one or more GPUs."""
-    if not torch.cuda.is_available():
+    if not uses_cuda() or not torch.cuda.is_available():
         return
     targets = device_ids if device_ids else list(range(torch.cuda.device_count()))
     for device_id in targets:
@@ -81,7 +82,7 @@ class MemoryManager:
             cache_stats: Whether to cache memory stats for performance
         """
         self.device_id = device_id
-        self.device = torch.device(f"cuda:{device_id}")
+        self.device = torch.device(f"cuda:{device_id}" if uses_cuda() else "cpu")
         self.auto_clear = config.auto_clear_cache
         self.clear_threshold_mb = config.clear_cache_threshold_mb
         self.reduce_batch_on_oom = config.reduce_batch_on_oom
@@ -106,7 +107,7 @@ class MemoryManager:
         Returns:
             Dict with memory stats in MB
         """
-        if not torch.cuda.is_available():
+        if not uses_cuda() or not torch.cuda.is_available():
             return {
                 "allocated_mb": 0,
                 "reserved_mb": 0,
@@ -126,6 +127,11 @@ class MemoryManager:
         reserved = torch.cuda.memory_reserved(self.device) / 1024 / 1024
         total = torch.cuda.get_device_properties(self.device).total_memory / 1024 / 1024
         free = total - allocated
+        if config.get("runtime", "profile"):
+            # ORT owns allocations outside Torch's allocator. Include those and
+            # desktop/other-process use when sizing a low-VRAM streaming chunk.
+            free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
+            free, total = free_bytes / 1024**2, total_bytes / 1024**2
         utilization = (allocated / total * 100) if total > 0 else 0
 
         stats = {
@@ -176,7 +182,7 @@ class MemoryManager:
         Args:
             force: Force cache clear even if threshold not exceeded
         """
-        if not torch.cuda.is_available():
+        if not uses_cuda() or not torch.cuda.is_available():
             return
 
         stats_before = self.get_memory_stats(use_cache=False)
@@ -344,7 +350,7 @@ def refresh_gpu_memory(
     ids = device_ids if device_ids is not None else [device_id]
     stats: Dict[int, Dict[str, float]] = {}
 
-    if not torch.cuda.is_available():
+    if not uses_cuda() or not torch.cuda.is_available():
         return stats
 
     for did in ids:
@@ -366,7 +372,7 @@ def select_enhancement_gpu(
 ) -> int:
     """Pick the GPU with the most free VRAM for enhancement."""
     ids = candidates if candidates else [preferred]
-    if not torch.cuda.is_available() or not ids:
+    if not uses_cuda() or not torch.cuda.is_available() or not ids:
         return preferred
 
     best_id = ids[0]

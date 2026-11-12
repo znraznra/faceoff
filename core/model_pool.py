@@ -17,6 +17,7 @@ import torch
 from insightface.app import FaceAnalysis
 
 from utils.config_manager import config
+from utils.hardware_backend import uses_cuda, validate_session
 from utils.onnx_providers import (
     build_face_analysis_providers,
     build_swapper_providers,
@@ -27,6 +28,11 @@ from utils.onnx_providers import (
 logger = logging.getLogger("FaceOff")
 
 InstanceKey = Tuple[int, bool]
+
+
+def select_device(device_id):
+    if uses_cuda():
+        torch.cuda.set_device(device_id)
 
 
 def _trt_warmup_images() -> List[np.ndarray]:
@@ -76,7 +82,7 @@ class GPUModelInstance:
         )
         self._lock = threading.Lock()
 
-        torch.cuda.set_device(device_id)
+        select_device(device_id)
 
         logger.info("Initializing models for GPU %d...", device_id)
 
@@ -96,14 +102,23 @@ class GPUModelInstance:
                 use_tensorrt=use_trt,
                 tensorrt_fp16=self.tensorrt_fp16,
             )
-            face_app = FaceAnalysis(
-                name=config.face_analysis_name,
-                providers=face_providers,
-            )
+            portable = config.get("runtime", "profile") in ("p600", "b580")
+            if portable:
+                from core.portable_models import PortableFaceAnalysis
+
+                face_app = PortableFaceAnalysis(
+                    config.buffalo_model_path, face_providers, self._session_options
+                )
+            else:
+                face_app = FaceAnalysis(
+                    name=config.face_analysis_name, providers=face_providers
+                )
             face_app.prepare(
                 ctx_id=self.device_id,
                 det_size=tuple(config.face_analysis_det_size),
             )
+            for task, model in face_app.models.items():
+                validate_session(model.session, f"face analysis {task}")
             return face_app
 
         if self.use_tensorrt:
@@ -132,7 +147,7 @@ class GPUModelInstance:
             len(images),
         )
         with tensorrt_compile_guard():
-            torch.cuda.set_device(self.device_id)
+            select_device(self.device_id)
             for image in images:
                 self.face_app.get(image)
         logger.info("TensorRT face-detection warmup complete on GPU %d", self.device_id)
@@ -149,6 +164,26 @@ class GPUModelInstance:
     def _load_swapper(self, model_path: str, providers: List):
         from insightface.model_zoo import get_model
 
+        sess_options = self._session_options("swapper")
+        if config.get("runtime", "profile") in ("p600", "b580"):
+            from insightface.model_zoo.inswapper import INSwapper
+
+            session = ort.InferenceSession(
+                model_path, sess_options=sess_options, providers=providers
+            )
+            model = INSwapper(model_file=model_path, session=session)
+        else:
+            model = get_model(
+                model_path, providers=providers, session_options=sess_options
+            )
+        validate_session(model.session, "inswapper")
+        return model
+
+    def _session_options(self, label):
+        import os
+        import uuid
+        from pathlib import Path
+
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -156,12 +191,23 @@ class GPUModelInstance:
         sess_options.intra_op_num_threads = 4
         sess_options.inter_op_num_threads = 4
 
-        return get_model(model_path, providers=providers, session_options=sess_options)
+        if not uses_cuda():
+            sess_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            )
+        profile_dir = os.environ.get("FACEOFF_ORT_PROFILE_DIR")
+        if profile_dir:
+            Path(profile_dir).mkdir(parents=True, exist_ok=True)
+            sess_options.enable_profiling = True
+            sess_options.profile_file_prefix = str(
+                Path(profile_dir) / f"{label}-{uuid.uuid4().hex}"
+            )
+        return sess_options
 
     @contextmanager
     def acquire(self):
         with self._lock:
-            torch.cuda.set_device(self.device_id)
+            select_device(self.device_id)
             yield self
 
     def get_faces(self, image):
@@ -171,12 +217,27 @@ class GPUModelInstance:
                     f"GPU {self.device_id} face models were released; "
                     "re-acquire from ModelPool before detection"
                 )
-            torch.cuda.set_device(self.device_id)
+            select_device(self.device_id)
+            if config.get("runtime", "profile") in ("p600", "b580"):
+                # PIL, FFmpeg and FaceOff's host frames are RGB. InsightFace is BGR.
+                import cv2
+
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             return self.face_app.get(image)
 
     def swap_face(self, frame, target_face, source_face, paste_back: bool = True):
         with self._lock:
-            torch.cuda.set_device(self.device_id)
+            select_device(self.device_id)
+            if config.get("runtime", "profile") in ("p600", "b580"):
+                import cv2
+
+                if not paste_back:
+                    raise ValueError("Portable swap_face requires paste_back=True")
+                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                return cv2.cvtColor(
+                    self.swapper.get(bgr, target_face, source_face, paste_back=True),
+                    cv2.COLOR_BGR2RGB,
+                )
             return self.swapper.get(
                 frame, target_face, source_face, paste_back=paste_back
             )
@@ -200,8 +261,13 @@ class GPUModelInstance:
         src_f32 = src_stack.astype(np.float32, copy=False)
 
         with self._lock:
-            torch.cuda.set_device(self.device_id)
-            if use_iobinding and torch.cuda.is_available():
+            select_device(self.device_id)
+            if (
+                use_iobinding
+                and uses_cuda()
+                and uses_cuda()
+                and torch.cuda.is_available()
+            ):
                 try:
                     from torch.utils.dlpack import from_dlpack, to_dlpack
 
@@ -268,10 +334,19 @@ class GPUModelInstance:
                 return frame_gpu
             return image.copy()
 
+        if config.get("runtime", "profile") in ("p600", "b580"):
+            # Small, provider-independent inference calls bound VRAM and preserve
+            # InsightFace's canonical BGR crop/paste implementation on both cards.
+            swapped = image.copy()
+            for face in target_faces:
+                swapped = self.swap_face(swapped, face, source_face)
+            return swapped
+
         gpu_paste = (
             paste_on_gpu
             and config.gpu_paste_on_gpu
             and frame_gpu is not None
+            and uses_cuda()
             and torch.cuda.is_available()
         )
 
@@ -359,8 +434,9 @@ class GPUModelInstance:
                 del self.swapper
             if hasattr(self, "face_app"):
                 del self.face_app
-            torch.cuda.set_device(self.device_id)
-            torch.cuda.empty_cache()
+            select_device(self.device_id)
+            if uses_cuda():
+                torch.cuda.empty_cache()
             logger.debug("Cleaned up GPU %d models", self.device_id)
         except Exception as e:
             logger.warning("Error cleaning up GPU %d: %s", self.device_id, e)

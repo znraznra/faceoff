@@ -12,6 +12,8 @@ __pycache__/
 
 # --- Virtual environments ---
 .venv/
+.venv-p600/
+.venv-b580/
 venv/
 env/
 ENV/

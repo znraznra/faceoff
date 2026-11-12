@@ -1,0 +1,37 @@
+# Opt in with FACEOFF_PROFILE=p600. Does not change upstream defaults.
+runtime:
+  backend: cuda
+  require_gpu: true
+  profile: p600
+gpu:
+  batch_size: 1
+  max_batch_size: 1
+  workers_per_gpu: 1
+  multi_gpu_video_enabled: false
+  tensorrt_enabled: false
+  onnx_mem_limit_mb: 1024 # Per ONNX session, not a total process limit.
+  cudnn_conv_use_max_workspace: false
+  auto_workload_tune: false
+  frame_retention_enabled: false
+  paste_on_gpu: false
+  detection_on_gpu: false
+  enhancement_chain_enabled: false
+streaming:
+  chunk_size: 2
+  hwaccel_decode: true
+  zero_copy_enabled: false
+  nvcodec_decode: false
+  nvenc_encode: true
+  video_codec: h264_nvenc
+  encoder_required: true
+  video_bitrate: 6M
+  encoder_diagnostics: true
+enhancement:
+  defaults:
+    tile_size: 128
+    outscale: 2
+    use_fp32: true
+model_cache:
+  preload_on_startup: false
+compression:
+  enabled: false

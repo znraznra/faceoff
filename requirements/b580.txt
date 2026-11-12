@@ -1,0 +1,5 @@
+-r portable-common.txt
+onnxruntime-openvino==1.23.0
+openvino==2025.3.0
+# Use a CPU Torch wheel for the current swap-only Intel path; ONNX models run on
+# the B580 through OpenVINO. XPU restoration/enhancement is not yet validated.

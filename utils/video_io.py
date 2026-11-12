@@ -15,6 +15,8 @@ from typing import List, Optional, Union
 
 import numpy as np
 
+from utils.config_manager import config
+
 logger = logging.getLogger("FaceOff")
 
 
@@ -410,13 +412,19 @@ class StreamingVideoWriter:
         self.frames_written = 0
         self._finalized = False
 
+        required = config.get("streaming", "encoder_required", default=False)
+        if required and use_nvenc and not nvenc_available():
+            raise RuntimeError("Required h264_nvenc encoder is missing from FFmpeg")
         video_codec = "h264_nvenc" if use_nvenc and nvenc_available() else codec
+        self.video_codec = video_codec
         cmd = [
             "ffmpeg",
             "-y",
             "-hide_banner",
             "-loglevel",
-            "error",
+            "verbose"
+            if config.get("streaming", "encoder_diagnostics", default=False)
+            else "error",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -428,12 +436,37 @@ class StreamingVideoWriter:
             "-i",
             "pipe:0",
         ]
+        if video_codec == "h264_qsv" and config.get("runtime", "profile") == "b580":
+            from utils.intel_video import qsv_device_args
+
+            cmd[1:1] = qsv_device_args()
+            pix_fmt = "qsv"
         if audio_path:
             cmd.extend(
                 ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
             )
+        if video_codec == "h264_qsv" and config.get("runtime", "profile") == "b580":
+            cmd.extend(["-vf", "format=nv12,hwupload=extra_hw_frames=16"])
         if video_codec == "h264_nvenc":
-            cmd.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(crf)])
+            cmd.extend(["-c:v", "h264_nvenc", "-preset", "p4"])
+            if config.get("runtime", "profile") == "p600":
+                cmd.extend(["-gpu", "0"])
+            bitrate = config.get("streaming", "video_bitrate")
+            if bitrate:
+                cmd.extend(["-b:v", str(bitrate)])
+            else:
+                cmd.extend(["-cq", str(crf)])
+        elif video_codec == "h264_qsv":
+            cmd.extend(
+                [
+                    "-c:v",
+                    "h264_qsv",
+                    "-preset",
+                    "medium",
+                    "-b:v",
+                    str(config.get("streaming", "video_bitrate", default="6M")),
+                ]
+            )
         else:
             cmd.extend(["-c:v", video_codec, "-preset", preset, "-crf", str(crf)])
         if audio_path:
@@ -448,6 +481,8 @@ class StreamingVideoWriter:
             stderr=subprocess.PIPE,
         )
         self._stderr_drain = _FfmpegStderrDrain(self._proc, label="encode")
+        self.command = cmd
+        logger.info("Encoder command: %s", subprocess.list2cmdline(cmd))
         logger.info(
             "Streaming encode started: %s (%dx%d @ %.2f fps, codec=%s)",
             self.output_path.name,
@@ -511,6 +546,10 @@ class StreamingVideoWriter:
         self._stderr_drain.join(timeout=5.0)
         stderr = self._stderr_drain.get_text()
         self._proc.wait(timeout=600)
+        if config.get("streaming", "encoder_diagnostics", default=False):
+            self.output_path.with_suffix(".ffmpeg.log").write_text(
+                stderr, encoding="utf-8"
+            )
         ok = self._proc.returncode == 0 and self.output_path.exists()
         if ok:
             logger.info(

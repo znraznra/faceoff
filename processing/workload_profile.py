@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 import torch
 
 from utils.config_manager import config
+from utils.hardware_backend import uses_cuda
 
 logger = logging.getLogger("FaceOff")
 
@@ -91,6 +92,19 @@ def resolve_workload_profile(
 
     Returns None when ``gpu.auto_workload_tune`` is disabled (use config.yaml).
     """
+    if not uses_cuda():
+        return WorkloadProfile(
+            name="intel_host_frames",
+            frame_retention=False,
+            paste_on_gpu=False,
+            detection_on_gpu=False,
+            enhancement_chain=False,
+            zero_copy=False,
+            pinned_encode=False,
+            defer_download=False,
+            chunk_size=config.streaming_chunk_size,
+            use_nvcodec_decode=False,
+        )
     if not config.gpu_auto_workload_tune:
         return None
 
